@@ -1,1 +1,502 @@
+import { databaseService, UserProfile } from './database-service'
+import { useAuthStore } from '@/store/auth-store'
 
+// Resource categories in the system
+export const RESOURCES = {
+  USERS: 'users',
+  DEVICES: 'devices',
+  MAINTENANCE: 'maintenance',
+  REPORTS: 'reports',
+  ANALYTICS: 'analytics',
+  SYSTEM: 'system',
+  AUDIT: 'audit',
+  FILES: 'files',
+  EMAIL: 'email',
+  AI_CHAT: 'ai_chat'
+} as const
+
+// Permission actions
+export const ACTIONS = {
+  CREATE: 'create',
+  READ: 'read',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  EXPORT: 'export',
+  IMPORT: 'import',
+  APPROVE: 'approve',
+  ASSIGN: 'assign',
+  CONFIGURE: 'configure'
+} as const
+
+// Individual permissions
+export type Permission = `${typeof RESOURCES[keyof typeof RESOURCES]}:${typeof ACTIONS[keyof typeof ACTIONS]}`
+
+// Role definitions with hierarchical permissions
+export const ROLE_PERMISSIONS: Record<string, Permission[]> = {
+  viewer: [
+    'devices:read',
+    'maintenance:read',
+    'reports:read',
+    'analytics:read',
+    'files:read',
+    'ai_chat:read'
+  ],
+  
+  technician: [
+    // Inherit viewer permissions
+    'devices:read',
+    'maintenance:read',
+    'reports:read',
+    'analytics:read',
+    'files:read',
+    'ai_chat:read',
+    
+    // Additional technician permissions
+    'devices:update',
+    'maintenance:create',
+    'maintenance:update',
+    'files:create',
+    'files:update',
+    'ai_chat:create',
+    'reports:export'
+  ],
+  
+  manager: [
+    // Inherit technician permissions
+    'devices:read',
+    'devices:update',
+    'maintenance:read',
+    'maintenance:create',
+    'maintenance:update',
+    'reports:read',
+    'reports:export',
+    'analytics:read',
+    'files:read',
+    'files:create',
+    'files:update',
+    'ai_chat:read',
+    'ai_chat:create',
+    
+    // Additional manager permissions
+    'devices:create',
+    'devices:delete',
+    'maintenance:delete',
+    'maintenance:approve',
+    'maintenance:assign',
+    'users:read',
+    'users:create',
+    'users:update',
+    'reports:create',
+    'reports:update',
+    'analytics:export',
+    'files:delete',
+    'email:create',
+    'audit:read'
+  ],
+  
+  admin: [
+    // Full system access - all permissions
+    'users:create',
+    'users:read',
+    'users:update',
+    'users:delete',
+    'users:export',
+    'users:import',
+    'devices:create',
+    'devices:read',
+    'devices:update',
+    'devices:delete',
+    'devices:export',
+    'devices:import',
+    'devices:configure',
+    'maintenance:create',
+    'maintenance:read',
+    'maintenance:update',
+    'maintenance:delete',
+    'maintenance:export',
+    'maintenance:approve',
+    'maintenance:assign',
+    'reports:create',
+    'reports:read',
+    'reports:update',
+    'reports:delete',
+    'reports:export',
+    'analytics:read',
+    'analytics:export',
+    'analytics:configure',
+    'system:configure',
+    'audit:read',
+    'audit:export',
+    'files:create',
+    'files:read',
+    'files:update',
+    'files:delete',
+    'files:export',
+    'email:create',
+    'email:configure',
+    'ai_chat:read',
+    'ai_chat:create',
+    'ai_chat:configure'
+  ]
+}
+
+// Department-based permission modifiers
+export const DEPARTMENT_PERMISSIONS: Record<string, Permission[]> = {
+  ophthalmology: [
+    'devices:read',
+    'devices:update',
+    'maintenance:read',
+    'maintenance:create',
+    'reports:read',
+    'ai_chat:create'
+  ],
+  
+  biomedical: [
+    'devices:create',
+    'devices:read',
+    'devices:update',
+    'devices:configure',
+    'maintenance:create',
+    'maintenance:update',
+    'maintenance:approve',
+    'reports:create',
+    'reports:update'
+  ],
+  
+  it: [
+    'system:configure',
+    'users:read',
+    'users:update',
+    'audit:read',
+    'files:configure',
+    'email:configure',
+    'ai_chat:configure'
+  ],
+  
+  administration: [
+    'users:read',
+    'reports:read',
+    'reports:export',
+    'analytics:read',
+    'analytics:export',
+    'audit:read'
+  ]
+}
+
+// Permission matrix utility class
+class PermissionService {
+  
+  /**
+   * Get all permissions for a user based on role and department
+   */
+  getUserPermissions(user: UserProfile): Permission[] {
+    const rolePermissions = ROLE_PERMISSIONS[user.role] || []
+    const departmentPermissions = DEPARTMENT_PERMISSIONS[user.department] || []
+    
+    // Custom permissions from user profile
+    let customPermissions: Permission[] = []
+    if (user.permissions) {
+      try {
+        customPermissions = JSON.parse(user.permissions)
+      } catch (error) {
+        console.warn('Invalid permissions JSON for user:', user.email)
+      }
+    }
+    
+    // Combine and deduplicate permissions
+    const allPermissions = [
+      ...rolePermissions,
+      ...departmentPermissions,
+      ...customPermissions
+    ]
+    
+    return [...new Set(allPermissions)]
+  }
+  
+  /**
+   * Check if user has specific permission
+   */
+  hasPermission(user: UserProfile, permission: Permission): boolean {
+    if (user.status !== 'active') {
+      return false
+    }
+    
+    const userPermissions = this.getUserPermissions(user)
+    return userPermissions.includes(permission)
+  }
+  
+  /**
+   * Check if user has any of the specified permissions
+   */
+  hasAnyPermission(user: UserProfile, permissions: Permission[]): boolean {
+    return permissions.some(permission => this.hasPermission(user, permission))
+  }
+  
+  /**
+   * Check if user has all of the specified permissions
+   */
+  hasAllPermissions(user: UserProfile, permissions: Permission[]): boolean {
+    return permissions.every(permission => this.hasPermission(user, permission))
+  }
+  
+  /**
+   * Get permission matrix for all roles
+   */
+  getPermissionMatrix(): Record<string, Permission[]> {
+    return ROLE_PERMISSIONS
+  }
+  
+  /**
+   * Get available permissions grouped by resource
+   */
+  getAvailablePermissions(): Record<string, Permission[]> {
+    const grouped: Record<string, Permission[]> = {}
+    
+    Object.values(RESOURCES).forEach(resource => {
+      grouped[resource] = Object.values(ACTIONS).map(action => `${resource}:${action}` as Permission)
+    })
+    
+    return grouped
+  }
+  
+  /**
+   * Validate permission string format
+   */
+  isValidPermission(permission: string): permission is Permission {
+    const [resource, action] = permission.split(':')
+    return Object.values(RESOURCES).includes(resource as any) && 
+           Object.values(ACTIONS).includes(action as any)
+  }
+  
+  /**
+   * Get current user permissions
+   */
+  async getCurrentUserPermissions(): Promise<Permission[]> {
+    try {
+      const userId = useAuthStore.getState().userId
+      if (!userId) {
+        return []
+      }
+      
+      const user = await databaseService.getUserById(userId)
+      if (!user) {
+        return []
+      }
+      
+      return this.getUserPermissions(user)
+    } catch (error) {
+      console.error('Error getting current user permissions:', error)
+      return []
+    }
+  }
+  
+  /**
+   * Check if current user has permission
+   */
+  async currentUserHasPermission(permission: Permission): Promise<boolean> {
+    try {
+      const userId = useAuthStore.getState().userId
+      if (!userId) {
+        return false
+      }
+      
+      const user = await databaseService.getUserById(userId)
+      if (!user) {
+        // User doesn't exist in database yet, return false for safety
+        console.warn('User not found in database, denying permission:', userId)
+        return false
+      }
+      
+      return this.hasPermission(user, permission)
+    } catch (error) {
+      console.error('Error checking current user permission:', error)
+      return false
+    }
+  }
+  
+  /**
+   * Grant custom permission to user
+   */
+  async grantPermission(userId: string, permission: Permission): Promise<void> {
+    try {
+      const user = await databaseService.getUserById(userId)
+      if (!user || !user._id) {
+        throw new Error('User not found')
+      }
+      
+      let customPermissions: Permission[] = []
+      if (user.permissions) {
+        try {
+          customPermissions = JSON.parse(user.permissions)
+        } catch (error) {
+          console.warn('Invalid permissions JSON, resetting')
+        }
+      }
+      
+      if (!customPermissions.includes(permission)) {
+        customPermissions.push(permission)
+        
+        await databaseService.updateUser(userId, {
+          ...user,
+          permissions: JSON.stringify(customPermissions)
+        })
+        
+        // Log the permission change
+        await databaseService.logActivity({
+          user_id: useAuthStore.getState().userId || 'system',
+          action_type: 'update',
+          resource_type: 'user_permissions',
+          resource_id: userId,
+          description: `Granted permission: ${permission}`,
+          timestamp: new Date().toISOString()
+        })
+      }
+    } catch (error) {
+      console.error('Error granting permission:', error)
+      throw new Error('Failed to grant permission')
+    }
+  }
+  
+  /**
+   * Revoke custom permission from user
+   */
+  async revokePermission(userId: string, permission: Permission): Promise<void> {
+    try {
+      const user = await databaseService.getUserById(userId)
+      if (!user || !user._id) {
+        throw new Error('User not found')
+      }
+      
+      let customPermissions: Permission[] = []
+      if (user.permissions) {
+        try {
+          customPermissions = JSON.parse(user.permissions)
+        } catch (error) {
+          console.warn('Invalid permissions JSON, resetting')
+        }
+      }
+      
+      const updatedPermissions = customPermissions.filter(p => p !== permission)
+      
+      await databaseService.updateUser(userId, {
+        ...user,
+        permissions: JSON.stringify(updatedPermissions)
+      })
+      
+      // Log the permission change
+      await databaseService.logActivity({
+        user_id: useAuthStore.getState().userId || 'system',
+        action_type: 'update',
+        resource_type: 'user_permissions',
+        resource_id: userId,
+        description: `Revoked permission: ${permission}`,
+        timestamp: new Date().toISOString()
+      })
+    } catch (error) {
+      console.error('Error revoking permission:', error)
+      throw new Error('Failed to revoke permission')
+    }
+  }
+  
+  /**
+   * Get role hierarchy (for role comparison)
+   */
+  getRoleHierarchy(): Record<string, number> {
+    return {
+      viewer: 1,
+      technician: 2,
+      manager: 3,
+      admin: 4
+    }
+  }
+  
+  /**
+   * Check if user has higher or equal role level
+   */
+  hasRoleLevel(userRole: string, requiredRole: string): boolean {
+    const hierarchy = this.getRoleHierarchy()
+    return (hierarchy[userRole] || 0) >= (hierarchy[requiredRole] || 0)
+  }
+  
+  /**
+   * Get permission description
+   */
+  getPermissionDescription(permission: Permission): string {
+    const [resource, action] = permission.split(':')
+    
+    const resourceNames: Record<string, string> = {
+      users: 'User Management',
+      devices: 'Medical Devices',
+      maintenance: 'Maintenance Records',
+      reports: 'Reports & Documentation',
+      analytics: 'Analytics & Insights',
+      system: 'System Configuration',
+      audit: 'Audit Logs',
+      files: 'File Management',
+      email: 'Email Communications',
+      ai_chat: 'AI Assistant'
+    }
+    
+    const actionNames: Record<string, string> = {
+      create: 'Create new',
+      read: 'View/Read',
+      update: 'Edit/Update',
+      delete: 'Delete',
+      export: 'Export data',
+      import: 'Import data',
+      approve: 'Approve requests',
+      assign: 'Assign tasks',
+      configure: 'Configure settings'
+    }
+    
+    return `${actionNames[action] || action} ${resourceNames[resource] || resource}`
+  }
+}
+
+export const permissionService = new PermissionService()
+
+// Permission validation decorator/HOC
+export function requirePermission(permission: Permission) {
+  return function(target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+    const originalMethod = descriptor.value
+    
+    descriptor.value = async function(...args: any[]) {
+      const hasPermission = await permissionService.currentUserHasPermission(permission)
+      if (!hasPermission) {
+        throw new Error(`Access denied: ${permission} permission required`)
+      }
+      return originalMethod.apply(this, args)
+    }
+    
+    return descriptor
+  }
+}
+
+// React hook for permission checking
+export function usePermissions() {
+  const getCurrentUserPermissions = async () => {
+    return await permissionService.getCurrentUserPermissions()
+  }
+  
+  const hasPermission = async (permission: Permission) => {
+    return await permissionService.currentUserHasPermission(permission)
+  }
+  
+  const hasAnyPermission = async (permissions: Permission[]) => {
+    const userPermissions = await getCurrentUserPermissions()
+    return permissions.some(permission => userPermissions.includes(permission))
+  }
+  
+  const hasAllPermissions = async (permissions: Permission[]) => {
+    const userPermissions = await getCurrentUserPermissions()
+    return permissions.every(permission => userPermissions.includes(permission))
+  }
+  
+  return {
+    getCurrentUserPermissions,
+    hasPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    getPermissionDescription: permissionService.getPermissionDescription
+  }
+}
