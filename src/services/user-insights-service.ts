@@ -1,4 +1,3 @@
-
 // src/services/user-insights-service.ts
 import { databaseService, UserProfile, UserActivity } from './database-service';
 import { emailService } from './email-service'; // Correctly imports the instance
